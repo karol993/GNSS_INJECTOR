@@ -12,10 +12,12 @@ static void process(char *command) {
   InjectorUtc time; float lat, lon; long offset; char arg[8]; char status[192]; size_t i;
   for (i = 0U; command[i] != '\0'; ++i) command[i] = (char)toupper((unsigned char)command[i]);
   InjectorStats_CliCommand();
-  if (strcmp(command,"HELP") == 0) reply("INJ,HELP,START,STOP,STATUS,TIME,POS,FIX,PPS,RMC,ZDA,OFFSET,RESET\r\n");
+  if (strcmp(command,"HELP") == 0) reply("INJ,HELP,START,STOP,STATUS,STATS,TXTEST,TIME,POS,FIX,PPS,RMC,ZDA,OFFSET,RESET\r\n");
   else if (strcmp(command,"START") == 0) { INJECTOR_Start(); reply("INJ,OK\r\n"); }
   else if (strcmp(command,"STOP") == 0) { INJECTOR_Stop(); reply("INJ,OK\r\n"); }
   else if (strcmp(command,"STATUS") == 0) { INJECTOR_Status(status, sizeof status); reply(status); }
+  else if (strcmp(command,"STATS") == 0) { INJECTOR_Stats(status, sizeof status); reply(status); }
+  else if (strcmp(command,"TXTEST") == 0) { HAL_StatusTypeDef tx_status = INJECTOR_TxTest(); if (tx_status == HAL_OK) reply("INJ,OK,TXTEST\r\n"); else { (void)snprintf(status, sizeof status, "INJ,ERR,TXTEST,%d\r\n", (int)tx_status); reply(status); } }
   else if (sscanf(command,"TIME %hu-%hhu-%hhu %hhu:%hhu:%hhu", &time.year,&time.month,&time.day,&time.hour,&time.minute,&time.second) == 6 && InjectorTime_IsValid(&time)) { INJECTOR_SetTime(&time); reply("INJ,OK\r\n"); }
   else if (sscanf(command,"POS %f %f", &lat, &lon) == 2 && lat >= -90.0f && lat <= 90.0f && lon >= -180.0f && lon <= 180.0f) { INJECTOR_SetPosition(lat,lon); reply("INJ,OK\r\n"); }
   else if (sscanf(command,"FIX %7s",arg) == 1 && (arg[0] == 'A' || arg[0] == 'V') && arg[1] == '\0') { INJECTOR_SetFix(arg[0]); reply("INJ,OK\r\n"); }

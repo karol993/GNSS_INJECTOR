@@ -20,6 +20,8 @@ void INJECTOR_SetZda(uint8_t enabled);
 uint8_t INJECTOR_SetOffset(int32_t milliseconds);
 int32_t INJECTOR_GetOffset(void);
 void INJECTOR_Status(char *out, uint32_t out_size);
+void INJECTOR_Stats(char *out, uint32_t out_size);
+HAL_StatusTypeDef INJECTOR_TxTest(void);
 void INJECTOR_ResetDefaults(void);
 
 #endif

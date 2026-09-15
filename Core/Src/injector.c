@@ -2,26 +2,38 @@
 #include "nmea_gen.h"
 #include "pps_gen.h"
 #include "injector_stats.h"
+#include "injector_scheduler.h"
 #include <stdio.h>
 
 typedef struct {
   UART_HandleTypeDef *control, *gnss; TIM_HandleTypeDef *reference;
   InjectorUtc epoch, nmea_epoch; float latitude, longitude; int32_t offset_ms;
-  uint32_t pps_tick, nmea_tick; uint8_t running, pps, rmc, zda, nmea_sent;
+  InjectorScheduler scheduler; uint8_t running, pps, rmc, zda;
 } InjectorState;
 static InjectorState state;
-static uint8_t due(uint32_t now, uint32_t deadline) { return (uint8_t)((int32_t)(now - deadline) >= 0); }
 static void schedule_epoch(uint32_t pps_tick) {
-  state.pps_tick = pps_tick;
-  state.nmea_tick = (uint32_t)(pps_tick + state.offset_ms * 1000);
+  InjectorScheduler_Schedule(&state.scheduler, pps_tick, state.offset_ms);
   state.nmea_epoch = state.epoch;
-  state.nmea_sent = 0U;
 }
 static char fix = 'A';
+static HAL_StatusTypeDef transmit_sentence(const char *text, int length) {
+  HAL_StatusTypeDef status;
+  if (length <= 0) return HAL_ERROR;
+  status = HAL_UART_Transmit(state.gnss, (uint8_t *)text, (uint16_t)length, 20U);
+  if (status == HAL_OK) InjectorStats_NmeaTxOk(); else InjectorStats_NmeaTxErr();
+  return status;
+}
 static void send_epoch_sentences(void) {
   char text[128]; int length;
-  if (state.rmc) { length = NMEA_FormatRMC(text, sizeof text, &state.nmea_epoch, state.latitude, state.longitude, fix); if (length > 0) { (void)HAL_UART_Transmit(state.gnss, (uint8_t *)text, (uint16_t)length, 20U); InjectorStats_RmcSent(); } }
-  if (state.zda) { length = NMEA_FormatZDA(text, sizeof text, &state.nmea_epoch); if (length > 0) { (void)HAL_UART_Transmit(state.gnss, (uint8_t *)text, (uint16_t)length, 20U); InjectorStats_ZdaSent(); } }
+  InjectorStats_NmeaScheduled();
+  if (state.rmc) {
+    length = NMEA_FormatRMC(text, sizeof text, &state.nmea_epoch, state.latitude, state.longitude, fix);
+    if (length > 0) { InjectorStats_RmcGenerated(); (void)transmit_sentence(text, length); }
+  }
+  if (state.zda) {
+    length = NMEA_FormatZDA(text, sizeof text, &state.nmea_epoch);
+    if (length > 0) { InjectorStats_ZdaGenerated(); (void)transmit_sentence(text, length); }
+  }
 }
 void INJECTOR_ResetDefaults(void) {
   state.epoch = (InjectorUtc){2026U, 9U, 15U, 10U, 0U, 0U}; state.latitude = 50.0f; state.longitude = 19.0f;
@@ -45,8 +57,32 @@ void INJECTOR_SetZda(uint8_t enabled) { state.zda = enabled; }
 uint8_t INJECTOR_SetOffset(int32_t milliseconds) { if (milliseconds < -500 || milliseconds > 500) return 0U; state.offset_ms = milliseconds; return 1U; }
 int32_t INJECTOR_GetOffset(void) { return state.offset_ms; }
 void INJECTOR_Status(char *out, uint32_t out_size) { (void)snprintf(out, out_size, "INJ,STATUS,TIME=%04u-%02u-%02uT%02u:%02u:%02u,FIX=%c,PPS=%s,RMC=%s,ZDA=%s,OFFSET=%ld,RUN=%s\r\n", state.epoch.year,state.epoch.month,state.epoch.day,state.epoch.hour,state.epoch.minute,state.epoch.second,fix,state.pps?"ON":"OFF",state.rmc?"ON":"OFF",state.zda?"ON":"OFF",(long)state.offset_ms,state.running?"ON":"OFF"); }
+void INJECTOR_Stats(char *out, uint32_t out_size) {
+  const InjectorStats *stats = InjectorStats_Get();
+  (void)snprintf(out, out_size, "INJ,STATS,NMEA_SCHED=%lu,NMEA_TX_OK=%lu,NMEA_TX_ERR=%lu,RMC_GEN=%lu,ZDA_GEN=%lu\r\n",
+                 (unsigned long)stats->nmea_sched, (unsigned long)stats->nmea_tx_ok,
+                 (unsigned long)stats->nmea_tx_err, (unsigned long)stats->rmc_gen,
+                 (unsigned long)stats->zda_gen);
+}
+HAL_StatusTypeDef INJECTOR_TxTest(void) {
+  char text[128];
+  int length = NMEA_FormatRMC(text, sizeof text, &state.epoch, state.latitude, state.longitude, fix);
+  if (length <= 0) return HAL_ERROR;
+  InjectorStats_RmcGenerated();
+  return transmit_sentence(text, length);
+}
 void INJECTOR_Task(void) {
   uint32_t now; if (!state.running) return; now = __HAL_TIM_GET_COUNTER(state.reference);
-  if (!state.nmea_sent && due(now, state.nmea_tick)) { send_epoch_sentences(); state.nmea_sent = 1U; }
-  if (due(now, state.pps_tick)) { if (state.pps) PPS_GenStart(); InjectorTime_IncrementSecond(&state.epoch); schedule_epoch(state.pps_tick + 1000000U); }
+  if (InjectorScheduler_PpsDue(&state.scheduler, now)) {
+    if (state.pps) PPS_GenStart();
+    state.scheduler.pps_fired = 1U;
+    InjectorTime_IncrementSecond(&state.epoch);
+  }
+  if (InjectorScheduler_NmeaDue(&state.scheduler, now)) {
+    send_epoch_sentences();
+    state.scheduler.nmea_sent = 1U;
+  }
+  if (InjectorScheduler_ReadyForNext(&state.scheduler)) {
+    schedule_epoch(state.scheduler.pps_tick + 1000000U);
+  }
 }
