@@ -1,0 +1,13 @@
+# STM32CubeIDE build products
+Debug/
+Release/
+*.o
+*.d
+*.elf
+*.map
+*.list
+*.hex
+*.bin
+
+# Eclipse local state
+.metadata/
