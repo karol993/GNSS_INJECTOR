@@ -11,6 +11,7 @@ typedef struct {
 uint8_t InjectorTime_IsLeapYear(uint16_t year);
 uint8_t InjectorTime_DaysInMonth(uint16_t year, uint8_t month);
 uint8_t InjectorTime_IsValid(const InjectorUtc *utc);
+uint8_t InjectorTime_Parse(const char *text, InjectorUtc *utc);
 void InjectorTime_IncrementSecond(InjectorUtc *utc);
 
 #endif

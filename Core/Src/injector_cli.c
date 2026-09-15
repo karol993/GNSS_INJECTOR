@@ -19,7 +19,7 @@ static void process(char *command) {
   else if (strcmp(command,"STATUS") == 0) { INJECTOR_Status(status, sizeof status); reply(status); }
   else if (strcmp(command,"STATS") == 0) { INJECTOR_Stats(status, sizeof status); reply(status); }
   else if (strcmp(command,"TXTEST") == 0) { HAL_StatusTypeDef tx_status = INJECTOR_TxTest(); if (tx_status == HAL_OK) reply("INJ,OK,TXTEST\r\n"); else { (void)snprintf(status, sizeof status, "INJ,ERR,TXTEST,%d\r\n", (int)tx_status); reply(status); } }
-  else if (sscanf(command,"TIME %hu-%hhu-%hhu %hhu:%hhu:%hhu", &time.year,&time.month,&time.day,&time.hour,&time.minute,&time.second) == 6 && InjectorTime_IsValid(&time)) { INJECTOR_SetTime(&time); reply("INJ,OK\r\n"); }
+  else if (strncmp(command,"TIME ",5U) == 0 && InjectorTime_Parse(command + 5, &time)) { INJECTOR_SetTime(&time); reply("INJ,OK\r\n"); }
   else if (strncmp(command,"POS ",4U) == 0 && InjectorPosition_ParsePair(command + 4, &latitude_udeg, &longitude_udeg)) { INJECTOR_SetPosition(latitude_udeg, longitude_udeg); reply("INJ,OK\r\n"); }
   else if (sscanf(command,"FIX %7s",arg) == 1 && (arg[0] == 'A' || arg[0] == 'V') && arg[1] == '\0') { INJECTOR_SetFix(arg[0]); reply("INJ,OK\r\n"); }
   else if (sscanf(command,"PPS %7s",arg) == 1 && (strcmp(arg,"ON") == 0 || strcmp(arg,"OFF") == 0)) { INJECTOR_SetPps((uint8_t)(arg[0] == 'O' && arg[1] == 'N')); reply("INJ,OK\r\n"); }
