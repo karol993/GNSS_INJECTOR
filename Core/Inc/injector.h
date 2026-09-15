@@ -12,7 +12,7 @@ void INJECTOR_Stop(void);
 uint8_t INJECTOR_IsRunning(void);
 void INJECTOR_SetTime(const InjectorUtc *utc);
 InjectorUtc INJECTOR_GetTime(void);
-void INJECTOR_SetPosition(float latitude, float longitude);
+void INJECTOR_SetPosition(int32_t latitude_udeg, int32_t longitude_udeg);
 void INJECTOR_SetFix(char fix);
 void INJECTOR_SetPps(uint8_t enabled);
 void INJECTOR_SetRmc(uint8_t enabled);
