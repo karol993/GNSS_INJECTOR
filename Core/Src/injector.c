@@ -9,7 +9,8 @@
 typedef struct {
   UART_HandleTypeDef *control, *gnss; TIM_HandleTypeDef *reference;
   InjectorUtc epoch, nmea_epoch; int32_t latitude_udeg, longitude_udeg, offset_ms;
-  InjectorScheduler scheduler; uint8_t running, pps, rmc, zda;
+  InjectorScheduler scheduler; InjectorMode mode; uint8_t running, pps, rmc, zda;
+  uint8_t lc29h_buffer[1536];
 } InjectorState;
 static InjectorState state;
 static void schedule_epoch(uint32_t pps_tick) {
@@ -24,9 +25,24 @@ static HAL_StatusTypeDef transmit_sentence(const char *text, int length) {
   if (status == HAL_OK) InjectorStats_NmeaTxOk(); else InjectorStats_NmeaTxErr();
   return status;
 }
-static void send_epoch_sentences(void) {
+static uint8_t send_epoch_sentences(void) {
   char text[128]; int length;
   InjectorStats_NmeaScheduled();
+  if (state.mode == INJECTOR_MODE_LC29H) {
+    uint32_t lines = 0U;
+    HAL_StatusTypeDef status;
+    if (state.gnss->gState != HAL_UART_STATE_READY) return 0U;
+    length = NMEA_FormatLC29HBurst((char *)state.lc29h_buffer, sizeof state.lc29h_buffer,
+                                   &state.nmea_epoch, state.latitude_udeg,
+                                   state.longitude_udeg, fix, &lines);
+    if (length <= 0) { InjectorStats_Lc29hTxErr(); InjectorStats_NmeaTxErr(); return 1U; }
+    InjectorStats_Lc29hBurst(lines, (uint32_t)length);
+    InjectorStats_RmcGenerated();
+    status = HAL_UART_Transmit_IT(state.gnss, state.lc29h_buffer, (uint16_t)length);
+    if (status == HAL_OK) { InjectorStats_Lc29hTxOk(); InjectorStats_NmeaTxOk(); }
+    else { InjectorStats_Lc29hTxErr(); InjectorStats_NmeaTxErr(); }
+    return 1U;
+  }
   if (state.rmc) {
     length = NMEA_FormatRMC(text, sizeof text, &state.nmea_epoch, state.latitude_udeg, state.longitude_udeg, fix);
     if (length > 0) { InjectorStats_RmcGenerated(); (void)transmit_sentence(text, length); }
@@ -35,10 +51,11 @@ static void send_epoch_sentences(void) {
     length = NMEA_FormatZDA(text, sizeof text, &state.nmea_epoch);
     if (length > 0) { InjectorStats_ZdaGenerated(); (void)transmit_sentence(text, length); }
   }
+  return 1U;
 }
 void INJECTOR_ResetDefaults(void) {
   state.epoch = (InjectorUtc){2026U, 9U, 15U, 10U, 0U, 0U}; state.latitude_udeg = 50000000; state.longitude_udeg = 19000000;
-  state.offset_ms = 200; state.pps = 1U; state.rmc = 1U; state.zda = 0U; fix = 'A';
+  state.offset_ms = 200; state.pps = 1U; state.rmc = 1U; state.zda = 0U; state.mode = INJECTOR_MODE_MINIMAL; fix = 'A';
 }
 void INJECTOR_Init(UART_HandleTypeDef *control_uart, UART_HandleTypeDef *gnss_uart, TIM_HandleTypeDef *tim2, TIM_HandleTypeDef *pps_timer) {
   static const char startup_log[] = "GNSS INJECTOR V1\r\nMCU=STM32F767ZITx\r\nCONTROL_UART=USART3 PD8/PD9 115200\r\nGNSS_UART=USART2_TX PD5 115200\r\nPPS_OUT=TIM3_CH1 PB4\r\nTIM2=1MHz\r\nSTATE=STOPPED\r\n";
@@ -55,15 +72,19 @@ void INJECTOR_SetFix(char value) { if (value == 'A' || value == 'V') fix = value
 void INJECTOR_SetPps(uint8_t enabled) { state.pps = enabled; if (!enabled) PPS_GenStop(); }
 void INJECTOR_SetRmc(uint8_t enabled) { state.rmc = enabled; }
 void INJECTOR_SetZda(uint8_t enabled) { state.zda = enabled; }
+void INJECTOR_SetMode(InjectorMode mode) { if (mode == INJECTOR_MODE_MINIMAL || mode == INJECTOR_MODE_LC29H) state.mode = mode; }
+InjectorMode INJECTOR_GetMode(void) { return state.mode; }
 uint8_t INJECTOR_SetOffset(int32_t milliseconds) { if (milliseconds < -500 || milliseconds > 500) return 0U; state.offset_ms = milliseconds; return 1U; }
 int32_t INJECTOR_GetOffset(void) { return state.offset_ms; }
-void INJECTOR_Status(char *out, uint32_t out_size) { char lat[16], lon[16]; InjectorPosition_Format(lat, sizeof lat, state.latitude_udeg); InjectorPosition_Format(lon, sizeof lon, state.longitude_udeg); (void)snprintf(out, out_size, "INJ,STATUS,TIME=%04u-%02u-%02uT%02u:%02u:%02u,LAT=%s,LON=%s,FIX=%c,PPS=%s,RMC=%s,ZDA=%s,OFFSET=%ld,RUN=%s\r\n", state.epoch.year,state.epoch.month,state.epoch.day,state.epoch.hour,state.epoch.minute,state.epoch.second,lat,lon,fix,state.pps?"ON":"OFF",state.rmc?"ON":"OFF",state.zda?"ON":"OFF",(long)state.offset_ms,state.running?"ON":"OFF"); }
+void INJECTOR_Status(char *out, uint32_t out_size) { char lat[16], lon[16]; InjectorPosition_Format(lat, sizeof lat, state.latitude_udeg); InjectorPosition_Format(lon, sizeof lon, state.longitude_udeg); (void)snprintf(out, out_size, "INJ,STATUS,TIME=%04u-%02u-%02uT%02u:%02u:%02u,LAT=%s,LON=%s,FIX=%c,MODE=%s,PPS=%s,RMC=%s,ZDA=%s,OFFSET=%ld,RUN=%s\r\n", state.epoch.year,state.epoch.month,state.epoch.day,state.epoch.hour,state.epoch.minute,state.epoch.second,lat,lon,fix,state.mode == INJECTOR_MODE_LC29H ? "LC29H" : "MINIMAL",state.pps?"ON":"OFF",state.rmc?"ON":"OFF",state.zda?"ON":"OFF",(long)state.offset_ms,state.running?"ON":"OFF"); }
 void INJECTOR_Stats(char *out, uint32_t out_size) {
   const InjectorStats *stats = InjectorStats_Get();
-  (void)snprintf(out, out_size, "INJ,STATS,NMEA_SCHED=%lu,NMEA_TX_OK=%lu,NMEA_TX_ERR=%lu,RMC_GEN=%lu,ZDA_GEN=%lu\r\n",
+  (void)snprintf(out, out_size, "INJ,STATS,NMEA_SCHED=%lu,NMEA_TX_OK=%lu,NMEA_TX_ERR=%lu,RMC_GEN=%lu,ZDA_GEN=%lu,LC29H_BURST_GEN=%lu,LC29H_LINES_GEN=%lu,LC29H_TX_OK=%lu,LC29H_TX_ERR=%lu,LAST_BURST_BYTES=%lu\r\n",
                  (unsigned long)stats->nmea_sched, (unsigned long)stats->nmea_tx_ok,
                  (unsigned long)stats->nmea_tx_err, (unsigned long)stats->rmc_gen,
-                 (unsigned long)stats->zda_gen);
+                 (unsigned long)stats->zda_gen, (unsigned long)stats->lc29h_burst_gen,
+                 (unsigned long)stats->lc29h_lines_gen, (unsigned long)stats->lc29h_tx_ok,
+                 (unsigned long)stats->lc29h_tx_err, (unsigned long)stats->last_burst_bytes);
 }
 HAL_StatusTypeDef INJECTOR_TxTest(void) {
   char text[128];
@@ -80,8 +101,7 @@ void INJECTOR_Task(void) {
     InjectorTime_IncrementSecond(&state.epoch);
   }
   if (InjectorScheduler_NmeaDue(&state.scheduler, now)) {
-    send_epoch_sentences();
-    state.scheduler.nmea_sent = 1U;
+    if (send_epoch_sentences()) state.scheduler.nmea_sent = 1U;
   }
   if (InjectorScheduler_ReadyForNext(&state.scheduler)) {
     schedule_epoch(state.scheduler.pps_tick + 1000000U);

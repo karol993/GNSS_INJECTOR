@@ -198,6 +198,13 @@ void SysTick_Handler(void)
 /* please refer to the startup file (startup_stm32f7xx.s).                    */
 /******************************************************************************/
 
+extern UART_HandleTypeDef huart2;
+
+void USART2_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart2);
+}
+
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */

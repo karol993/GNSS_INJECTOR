@@ -4,6 +4,7 @@
 #include "stm32f7xx_hal.h"
 
 void PPS_GenInit(TIM_HandleTypeDef *timer);
+/* Start continuous PWM once; repeated calls preserve its phase and output. */
 void PPS_GenStart(void);
 void PPS_GenStop(void);
 
